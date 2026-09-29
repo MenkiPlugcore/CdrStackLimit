@@ -5,6 +5,7 @@ import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.entity.Player;
+import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
 import org.bukkit.inventory.meta.BlockStateMeta;
@@ -19,10 +20,15 @@ import java.util.Locale;
 import java.util.Set;
 
 public final class VirtualStackService {
+    private static final List<String> DEFAULT_SUPPORTED_CONTAINERS = List.of(
+            "CHEST", "BARREL", "SHULKER_BOX", "ENDER_CHEST", "HOPPER", "DISPENSER", "DROPPER"
+    );
+
     private final CdrStackLimitPlugin plugin;
     private final NamespacedKey virtualAmountKey;
     private final NamespacedKey markerKey;
     private final Set<Material> blockedMaterials = new HashSet<>();
+    private final Set<String> supportedContainerTypes = new HashSet<>();
 
     public VirtualStackService(CdrStackLimitPlugin plugin) {
         this.plugin = plugin;
@@ -37,6 +43,15 @@ public final class VirtualStackService {
             Material material = Material.matchMaterial(raw);
             if (material != null) {
                 blockedMaterials.add(material);
+            }
+        }
+
+        supportedContainerTypes.clear();
+        List<String> configured = plugin.getConfig().getStringList("behavior.supported-containers");
+        List<String> source = configured.isEmpty() ? DEFAULT_SUPPORTED_CONTAINERS : configured;
+        for (String raw : source) {
+            if (raw != null && !raw.isBlank()) {
+                supportedContainerTypes.add(raw.trim().toUpperCase(Locale.ROOT));
             }
         }
     }
@@ -154,15 +169,35 @@ public final class VirtualStackService {
         item.setItemMeta(meta);
     }
 
+    public boolean isSupportedContainer(Inventory inventory) {
+        return inventory != null && supportedContainerTypes.contains(inventory.getType().name());
+    }
+
     public int addToPlayer(Player player, ItemStack source, int logicalAmount, int limit) {
+        int storageSize = player.getInventory().getStorageContents().length;
+        int[] slots = new int[storageSize];
+        for (int i = 0; i < storageSize; i++) {
+            slots[i] = i;
+        }
+        return addToPlayerSlots(player, source, logicalAmount, limit, slots);
+    }
+
+    public int addToPlayerSlots(Player player, ItemStack source, int logicalAmount, int limit, int[] slots) {
         if (logicalAmount <= 0 || source == null || !isEligible(source)) {
             return logicalAmount;
         }
 
         PlayerInventory inventory = player.getInventory();
+        int storageSize = inventory.getStorageContents().length;
         int remaining = logicalAmount;
 
-        for (int slot = 0; slot < inventory.getStorageContents().length && remaining > 0; slot++) {
+        for (int slot : slots) {
+            if (remaining <= 0) {
+                break;
+            }
+            if (slot < 0 || slot >= storageSize) {
+                continue;
+            }
             ItemStack existing = inventory.getItem(slot);
             if (existing == null || !canMerge(existing, source)) {
                 continue;
@@ -178,17 +213,128 @@ public final class VirtualStackService {
             remaining -= move;
         }
 
-        while (remaining > 0) {
-            int emptySlot = inventory.firstEmpty();
-            if (emptySlot < 0 || emptySlot >= inventory.getStorageContents().length) {
+        for (int slot : slots) {
+            if (remaining <= 0) {
                 break;
             }
+            if (slot < 0 || slot >= storageSize || inventory.getItem(slot) != null) {
+                continue;
+            }
+
             int move = Math.min(limit, remaining);
-            inventory.setItem(emptySlot, withLogicalAmount(source, move));
+            inventory.setItem(slot, withLogicalAmount(source, move));
             remaining -= move;
         }
 
         return remaining;
+    }
+
+    public int addToContainer(Inventory inventory, ItemStack source, int logicalAmount) {
+        if (inventory == null || source == null || logicalAmount <= 0 || !isEligible(source)) {
+            return logicalAmount;
+        }
+
+        ItemStack template = toVanillaTemplate(source);
+        int slotMax = Math.max(1, Math.min(template.getType().getMaxStackSize(), inventory.getMaxStackSize()));
+        int remaining = logicalAmount;
+
+        for (int slot = 0; slot < inventory.getSize() && remaining > 0; slot++) {
+            ItemStack existing = inventory.getItem(slot);
+            if (existing == null || existing.getType().isAir() || isVirtual(existing)) {
+                continue;
+            }
+            if (!isSameVanillaItem(existing, template) || existing.getAmount() >= slotMax) {
+                continue;
+            }
+
+            int move = Math.min(slotMax - existing.getAmount(), remaining);
+            existing.setAmount(existing.getAmount() + move);
+            inventory.setItem(slot, existing);
+            remaining -= move;
+        }
+
+        for (int slot = 0; slot < inventory.getSize() && remaining > 0; slot++) {
+            ItemStack existing = inventory.getItem(slot);
+            if (existing != null && !existing.getType().isAir()) {
+                continue;
+            }
+
+            int move = Math.min(slotMax, remaining);
+            ItemStack placed = template.clone();
+            placed.setAmount(move);
+            inventory.setItem(slot, placed);
+            remaining -= move;
+        }
+
+        return remaining;
+    }
+
+    public int depositIntoContainerSlot(Inventory inventory, int slot, ItemStack source, int requestedAmount) {
+        if (inventory == null || source == null || requestedAmount <= 0 || slot < 0 || slot >= inventory.getSize()) {
+            return 0;
+        }
+
+        ItemStack template = toVanillaTemplate(source);
+        int slotMax = Math.max(1, Math.min(template.getType().getMaxStackSize(), inventory.getMaxStackSize()));
+        ItemStack existing = inventory.getItem(slot);
+
+        if (existing == null || existing.getType().isAir()) {
+            int move = Math.min(slotMax, requestedAmount);
+            ItemStack placed = template.clone();
+            placed.setAmount(move);
+            inventory.setItem(slot, placed);
+            return move;
+        }
+
+        if (isVirtual(existing) || !isSameVanillaItem(existing, template) || existing.getAmount() >= slotMax) {
+            return 0;
+        }
+
+        int move = Math.min(slotMax - existing.getAmount(), requestedAmount);
+        existing.setAmount(existing.getAmount() + move);
+        inventory.setItem(slot, existing);
+        return move;
+    }
+
+    public int mergeIntoPlayerSlot(Player player, int slot, ItemStack source, int requestedAmount, int limit) {
+        PlayerInventory inventory = player.getInventory();
+        int storageSize = inventory.getStorageContents().length;
+        if (source == null || requestedAmount <= 0 || slot < 0 || slot >= storageSize) {
+            return 0;
+        }
+
+        ItemStack existing = inventory.getItem(slot);
+        if (existing == null || existing.getType().isAir()) {
+            int move = Math.min(limit, requestedAmount);
+            inventory.setItem(slot, withLogicalAmount(source, move));
+            return move;
+        }
+
+        if (!canMerge(existing, source)) {
+            return 0;
+        }
+
+        int existingLogical = getLogicalAmount(existing);
+        if (existingLogical >= limit) {
+            return 0;
+        }
+
+        int move = Math.min(limit - existingLogical, requestedAmount);
+        inventory.setItem(slot, withLogicalAmount(existing, existingLogical + move));
+        return move;
+    }
+
+    public boolean isSameVanillaItem(ItemStack first, ItemStack second) {
+        if (first == null || second == null) {
+            return false;
+        }
+        ItemStack a = first.clone();
+        ItemStack b = second.clone();
+        clearVirtualMetadata(a);
+        clearVirtualMetadata(b);
+        a.setAmount(1);
+        b.setAmount(1);
+        return a.isSimilar(b);
     }
 
     public void normalizeInventory(Player player, int limit) {
@@ -232,6 +378,22 @@ public final class VirtualStackService {
 
         for (ItemStack drop : overflow) {
             player.getWorld().dropItemNaturally(player.getLocation(), drop);
+        }
+    }
+
+    public void dropVanilla(Player player, ItemStack source, int logicalAmount) {
+        if (source == null || logicalAmount <= 0) {
+            return;
+        }
+        ItemStack template = toVanillaTemplate(source);
+        int max = template.getType().getMaxStackSize();
+        int remaining = logicalAmount;
+        while (remaining > 0) {
+            int move = Math.min(max, remaining);
+            ItemStack drop = template.clone();
+            drop.setAmount(move);
+            player.getWorld().dropItemNaturally(player.getLocation(), drop);
+            remaining -= move;
         }
     }
 
