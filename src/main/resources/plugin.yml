@@ -1,0 +1,27 @@
+name: CdrStackLimit
+version: '0.1.0'
+main: id.menkiplugcore.cdrstacklimit.CdrStackLimitPlugin
+api-version: '1.21'
+authors: [CADERA]
+description: Permission-based virtual block stack limits for Paper.
+website: https://github.com/MenkiPlugcore/CdrStackLimit
+
+commands:
+  cdrstacklimit:
+    description: Manage CdrStackLimit.
+    usage: /cdrstacklimit <info|reload|normalize>
+    aliases: [cdrstack, stacklimit]
+
+permissions:
+  cdrstacklimit.admin:
+    description: Allows administrative CdrStackLimit commands.
+    default: op
+  cdrstacklimit.stack.256:
+    description: Allows virtual block stacks up to 256.
+    default: false
+  cdrstacklimit.stack.500:
+    description: Allows virtual block stacks up to 500.
+    default: false
+  cdrstacklimit.stack.1000:
+    description: Allows virtual block stacks up to 1000.
+    default: false
