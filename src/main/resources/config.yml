@@ -1,5 +1,5 @@
-# CdrStackLimit v0.1.0
-# Virtual stacks are currently limited to plain vanilla block items.
+# CdrStackLimit v0.2.0
+# Virtual stacks are limited to plain vanilla block items.
 
 stack-limits:
   default: 64
@@ -13,14 +13,32 @@ stack-limits:
 
 behavior:
   reconcile-interval-ticks: 100
-  block-container-transfer: true
+
+  # Forces a next-tick inventory refresh after custom click/drag operations.
+  # Recommended for Geyser/Bedrock compatibility.
+  force-inventory-sync: true
+
+  # Virtual stacks are unpacked into vanilla stacks when moved into these inventories.
+  # Special inventories such as crafting, furnace, anvil, merchant, smithing, etc. remain protected.
+  supported-containers:
+    - CHEST
+    - BARREL
+    - SHULKER_BOX
+    - ENDER_CHEST
+    - HOPPER
+    - DISPENSER
+    - DROPPER
+
   blocked-materials:
     - SHULKER_BOX
 
 messages:
   prefix: "&8[&bCdrStackLimit&8] &r"
-  container-blocked: "&cVirtual stack tidak bisa dipindahkan ke container/crafting pada versi ini."
-  unsafe-click: "&eGunakan klik kiri untuk memindahkan virtual stack. Split, drag, shift-click, dan merge manual diblokir untuk mencegah dupe."
+  container-unpack: "&eVirtual stack harus di-unpack menjadi stack vanilla saat masuk container. Gunakan klik kiri/kanan, drag, atau shift-click."
+  unsupported-container: "&cVirtual stack tidak dapat digunakan di inventory khusus ini."
+  container-corrupt: "&cVirtual stack terdeteksi di dalam container. Pindahkan melalui player inventory atau hubungi admin."
+  mixed-drag-blocked: "&eDrag sekaligus antara container dan inventory player diblokir untuk keamanan."
+  unsafe-click: "&eInteraksi itu tidak aman untuk virtual stack dan diblokir."
   reloaded: "&aConfig berhasil direload."
   normalized: "&aInventory berhasil dinormalisasi."
   no-permission: "&cKamu tidak punya permission."
